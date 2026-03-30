@@ -1,7 +1,6 @@
-flask
-flask-cors
-pymongo
-paho-mqtt
-bcrypt
-PyJWT
-gunicorn
+Flask==2.3.6
+flask-cors==4.2.0
+pymongo==4.6.0
+paho-mqtt==1.6.1
+PyJWT==2.8.0
+bcrypt==4.1.0
