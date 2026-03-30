@@ -5,6 +5,7 @@ import paho.mqtt.publish as publish
 import paho.mqtt.client as mqtt
 import json, os
 
+# 🔐 security
 import jwt
 import datetime
 import bcrypt
@@ -12,23 +13,23 @@ import bcrypt
 app = Flask(__name__)
 CORS(app)
 
-# ===== CONFIG =====
+# ================== CONFIG ==================
 BROKER = "broker.emqx.io"
-SECRET_KEY = "super_secret_key_123"
+SECRET_KEY = "super_secret_key_123"  # ⚠️ đổi khi deploy
 
 MONGO_URI = "mongodb+srv://smarthome_user:123@cluster0.3s47ygi.mongodb.net/"
 mongo = MongoClient(MONGO_URI)
-
 db = mongo["smarthome"]
 users_col = db["users"]
 logs_col = db["logs"]
 
 last_status = {"result": "--"}
 
-# ===== MQTT =====
+# ================== MQTT ==================
 mqtt_client = mqtt.Client()
 
 def on_connect(client, userdata, flags, rc):
+    print("🌍 MQTT CONNECTED:", rc)
     client.subscribe("namhome/+/status")
 
 def on_message(client, userdata, msg):
@@ -43,23 +44,30 @@ mqtt_client.on_message = on_message
 mqtt_client.connect(BROKER, 1883, 60)
 mqtt_client.loop_start()
 
-# ===== AUTH =====
+# ================== AUTH ==================
 def check_auth(request):
     token = request.headers.get("Authorization")
+
     if not token:
         return None
+
     try:
-        return jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        data = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        return data
     except:
         return None
 
-# ===== LOGIN =====
+# ================== LOGIN ==================
 @app.route("/login", methods=["POST"])
 def login():
     data = request.json
+
     user = users_col.find_one({"username": data.get("username")})
 
-    if user and bcrypt.checkpw(data.get("password").encode(), user["password"]):
+    if user and bcrypt.checkpw(
+        data.get("password").encode(),
+        user["password"]
+    ):
         token = jwt.encode({
             "user": user["username"],
             "role": user.get("role", "user"),
@@ -75,16 +83,19 @@ def login():
 
     return jsonify({"success": False})
 
-# ===== CONTROL =====
+# ================== CONTROL ==================
 @app.route("/door", methods=["POST"])
 def door():
     user = check_auth(request)
+
     if not user:
         return jsonify({"error": "Unauthorized"}), 401
 
-    publish.single("namhome/door/cmd",
-                   json.dumps({"user": user["user"]}),
-                   hostname=BROKER, port=1883)
+    publish.single(
+        "namhome/door/cmd",
+        json.dumps({"user": user["user"]}),
+        hostname=BROKER, port=1883
+    )
 
     logs_col.insert_one({
         "user": user["user"],
@@ -94,20 +105,24 @@ def door():
 
     return jsonify({"success": True})
 
+
 @app.route("/light", methods=["POST"])
 def light():
     user = check_auth(request)
+
     if not user:
         return jsonify({"error": "Unauthorized"}), 401
 
     data = request.json
 
-    publish.single("namhome/light/cmd",
-                   json.dumps({
-                       "user": user["user"],
-                       "state": data.get("state")
-                   }),
-                   hostname=BROKER, port=1883)
+    publish.single(
+        "namhome/light/cmd",
+        json.dumps({
+            "user": user["user"],
+            "state": data.get("state")
+        }),
+        hostname=BROKER, port=1883
+    )
 
     logs_col.insert_one({
         "user": user["user"],
@@ -117,40 +132,47 @@ def light():
 
     return jsonify({"success": True})
 
-# ===== STATUS =====
+# ================== STATUS ==================
 @app.route("/status")
 def status():
     return jsonify(last_status)
 
-# ===== LOGS =====
+# ================== LOGS ==================
 @app.route("/logs")
-def logs():
+def get_logs():
     user = check_auth(request)
+
     if not user:
         return jsonify({"error": "Unauthorized"}), 401
 
     data = list(logs_col.find({}, {"_id": 0}).sort("time", -1).limit(50))
     return jsonify({"logs": data})
 
-# ===== USERS =====
+# ================== USERS ==================
 @app.route("/users")
-def users():
+def get_users():
     user = check_auth(request)
-    if not user or user["role"] != "admin":
+
+    if not user or user.get("role") != "admin":
         return jsonify({"error": "Forbidden"}), 403
 
     data = list(users_col.find({}, {"_id": 0, "password": 0}))
     return jsonify({"users": data})
 
+
 @app.route("/add_user", methods=["POST"])
 def add_user():
     user = check_auth(request)
-    if not user or user["role"] != "admin":
+
+    if not user or user.get("role") != "admin":
         return jsonify({"error": "Admin only"}), 403
 
     data = request.json
 
-    hashed = bcrypt.hashpw(data["password"].encode(), bcrypt.gensalt())
+    hashed = bcrypt.hashpw(
+        data["password"].encode(),
+        bcrypt.gensalt()
+    )
 
     users_col.insert_one({
         "username": data["username"],
@@ -160,18 +182,20 @@ def add_user():
 
     return jsonify({"success": True})
 
+
 @app.route("/delete/<username>", methods=["DELETE"])
-def delete(username):
+def delete_user(username):
     user = check_auth(request)
-    if not user or user["role"] != "admin":
+
+    if not user or user.get("role") != "admin":
         return jsonify({"error": "Admin only"}), 403
 
     users_col.delete_one({"username": username})
     return jsonify({"success": True})
 
-# ===== SEED ADMIN =====
+# ================== SEED ADMIN ==================
 @app.route("/seed_admin")
-def seed():
+def seed_admin():
     password = bcrypt.hashpw("123456".encode(), bcrypt.gensalt())
 
     users_col.update_one(
@@ -184,8 +208,8 @@ def seed():
         upsert=True
     )
 
-    return "admin created"
+    return "Admin created: admin / 123456"
 
-# ===== RUN =====
+# ================== RUN ==================
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
