@@ -44,14 +44,10 @@ mqtt_client.loop_start()
 # ===== AUTH =====
 def check_auth(request):
     token = request.headers.get("Authorization")
-
     if not token:
         return None
-
-    # 🔥 FIX Bearer
     if token.startswith("Bearer "):
         token = token.split(" ")[1]
-
     try:
         decoded = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
         return decoded
@@ -59,34 +55,32 @@ def check_auth(request):
         print("JWT ERROR:", e)
         return None
 
+# ===== ROOT ROUTE =====
+@app.route("/")
+def home():
+    return "API is running ✅"
+
 # ===== LOGIN =====
 @app.route("/login", methods=["POST"])
 def login():
     data = request.json
-
     if not data:
         return jsonify({"success": False})
-
     user = users_col.find_one({"username": data.get("username")})
-
     if user and bcrypt.checkpw(data.get("password").encode(), user["password"]):
         token = jwt.encode({
             "user": user["username"],
             "role": user.get("role", "user"),
             "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=5)
         }, SECRET_KEY, algorithm="HS256")
-
-        # 🔥 FIX bytes -> string
         if isinstance(token, bytes):
             token = token.decode("utf-8")
-
         return jsonify({
             "success": True,
             "token": token,
             "user": user["username"],
             "role": user.get("role", "user")
         })
-
     return jsonify({"success": False})
 
 # ===== CONTROL =====
@@ -95,20 +89,17 @@ def door():
     user = check_auth(request)
     if not user:
         return jsonify({"error": "Unauthorized"}), 401
-
     publish.single(
         "namhome/door/cmd",
         json.dumps({"user": user["user"]}),
         hostname=BROKER,
         port=1883
     )
-
     logs_col.insert_one({
         "user": user["user"],
         "action": "open door",
         "time": str(datetime.datetime.now())
     })
-
     return jsonify({"success": True})
 
 @app.route("/light", methods=["POST"])
@@ -116,9 +107,7 @@ def light():
     user = check_auth(request)
     if not user:
         return jsonify({"error": "Unauthorized"}), 401
-
     data = request.json
-
     publish.single(
         "namhome/light/cmd",
         json.dumps({
@@ -128,13 +117,11 @@ def light():
         hostname=BROKER,
         port=1883
     )
-
     logs_col.insert_one({
         "user": user["user"],
         "action": "light " + str(data.get("state")),
         "time": str(datetime.datetime.now())
     })
-
     return jsonify({"success": True})
 
 # ===== STATUS =====
@@ -148,13 +135,11 @@ def logs():
     user = check_auth(request)
     if not user:
         return jsonify({"error": "Unauthorized"}), 401
-
     data = list(
         logs_col.find({}, {"_id": 0})
         .sort("time", -1)
         .limit(50)
     )
-
     return jsonify({"logs": data})
 
 # ===== USERS =====
@@ -163,11 +148,9 @@ def users():
     user = check_auth(request)
     if not user or user["role"] != "admin":
         return jsonify({"error": "Forbidden"}), 403
-
     data = list(
         users_col.find({}, {"_id": 0, "password": 0})
     )
-
     return jsonify({"users": data})
 
 @app.route("/add_user", methods=["POST"])
@@ -175,17 +158,13 @@ def add_user():
     user = check_auth(request)
     if not user or user["role"] != "admin":
         return jsonify({"error": "Admin only"}), 403
-
     data = request.json
-
     hashed = bcrypt.hashpw(data["password"].encode(), bcrypt.gensalt())
-
     users_col.insert_one({
         "username": data["username"],
         "password": hashed,
         "role": data["role"]
     })
-
     return jsonify({"success": True})
 
 @app.route("/delete/<username>", methods=["DELETE"])
@@ -193,7 +172,6 @@ def delete(username):
     user = check_auth(request)
     if not user or user["role"] != "admin":
         return jsonify({"error": "Admin only"}), 403
-
     users_col.delete_one({"username": username})
     return jsonify({"success": True})
 
@@ -201,7 +179,6 @@ def delete(username):
 @app.route("/seed_admin")
 def seed():
     password = bcrypt.hashpw("123456".encode(), bcrypt.gensalt())
-
     users_col.update_one(
         {"username": "admin"},
         {"$set": {
@@ -211,7 +188,6 @@ def seed():
         }},
         upsert=True
     )
-
     return "Admin created"
 
 # ===== RUN =====
