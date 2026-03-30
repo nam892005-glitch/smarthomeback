@@ -2,4 +2,5 @@ flask
 flask-cors
 pymongo
 paho-mqtt
-gunicorn
+bcrypt
+PyJWT
