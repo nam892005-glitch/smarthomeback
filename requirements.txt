@@ -4,3 +4,4 @@ pymongo
 paho-mqtt
 bcrypt
 PyJWT
+gunicorn
