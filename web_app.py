@@ -3,10 +3,11 @@ from flask_cors import CORS
 from pymongo import MongoClient
 import paho.mqtt.publish as publish
 import paho.mqtt.client as mqtt
+from datetime import datetime
 import json, os
 
 app = Flask(__name__)
-CORS(app)  # ✅ cho phép Netlify gọi API
+CORS(app)
 
 # ================== CONFIG ==================
 BROKER = "broker.emqx.io"
@@ -29,16 +30,34 @@ def on_connect(client, userdata, flags, rc):
 def on_message(client, userdata, msg):
     global last_status
     try:
-        last_status = json.loads(msg.payload.decode())
-    except:
-        last_status = {"result": msg.payload.decode()}
+        payload = msg.payload.decode()
+
+        # thử parse JSON
+        try:
+            data = json.loads(payload)
+        except:
+            data = {"result": payload}
+
+        last_status = data
+
+        # ✅ lưu log
+        logs_col.insert_one({
+            "topic": msg.topic,
+            "data": data,
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        })
+
+        print("📩 STATUS:", data)
+
+    except Exception as e:
+        print("❌ MQTT ERROR:", e)
 
 mqtt_client.on_connect = on_connect
 mqtt_client.on_message = on_message
 mqtt_client.connect(BROKER, 1883, 60)
 mqtt_client.loop_start()
 
-# ================== LOGIN API ==================
+# ================== LOGIN ==================
 @app.route("/login", methods=["POST"])
 def login():
     data = request.json
@@ -59,26 +78,47 @@ def login():
 @app.route("/door", methods=["POST"])
 def door():
     data = request.json or {}
+
+    # 👉 gửi lệnh cho ESP32 (KHÔNG JSON)
     publish.single(
         "namhome/door/cmd",
-        json.dumps({"user": data.get("user", "web")}),
-        hostname=BROKER, port=1883
+        "OPEN",
+        hostname=BROKER,
+        port=1883
     )
+
+    # log
+    logs_col.insert_one({
+        "action": "door_open",
+        "user": data.get("user", "web"),
+        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    })
+
     return jsonify({"success": True})
 
 @app.route("/light", methods=["POST"])
 def light():
-    data = request.json
+    data = request.json or {}
+    state = data.get("state", "OFF")
+
+    # 👉 gửi cho ESP32
     publish.single(
         "namhome/light/cmd",
-        json.dumps({
-            "user": data.get("user", "web"),
-            "state": data.get("state")
-        }),
-        hostname=BROKER, port=1883
+        state,   # ✅ chỉ ON/OFF
+        hostname=BROKER,
+        port=1883
     )
+
+    # log
+    logs_col.insert_one({
+        "action": f"light_{state}",
+        "user": data.get("user", "web"),
+        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    })
+
     return jsonify({"success": True})
 
+# ================== STATUS ==================
 @app.route("/status")
 def status():
     return jsonify(last_status)
