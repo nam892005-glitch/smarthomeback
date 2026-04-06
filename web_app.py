@@ -40,13 +40,6 @@ def on_message(client, userdata, msg):
 
         last_status = data
 
-        # ✅ lưu log
-        logs_col.insert_one({
-            "topic": msg.topic,
-            "data": data,
-            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        })
-
         print("📩 STATUS:", data)
 
     except Exception as e:
