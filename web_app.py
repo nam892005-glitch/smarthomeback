@@ -50,7 +50,7 @@ mqtt_client.connect(BROKER, 1883, 60)
 mqtt_client.loop_start()
 
 # ================== LOGIN ==================
-@app.route("/index", methods=["POST"])
+@app.route("/login", methods=["POST"])
 def login():
     data = request.json
 
