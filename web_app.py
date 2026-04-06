@@ -3,7 +3,6 @@ from flask_cors import CORS
 from pymongo import MongoClient
 import paho.mqtt.publish as publish
 import paho.mqtt.client as mqtt
-from datetime import datetime
 import json, os
 
 app = Flask(__name__)
@@ -16,7 +15,6 @@ MONGO_URI = "mongodb+srv://smarthome_user:123@cluster0.3s47ygi.mongodb.net/"
 mongo = MongoClient(MONGO_URI)
 db = mongo["smarthome"]
 users_col = db["users"]
-logs_col = db["logs"]
 
 last_status = {"result": "--"}
 
@@ -32,14 +30,12 @@ def on_message(client, userdata, msg):
     try:
         payload = msg.payload.decode()
 
-        # thử parse JSON
         try:
             data = json.loads(payload)
         except:
             data = {"result": payload}
 
         last_status = data
-
         print("📩 STATUS:", data)
 
     except Exception as e:
@@ -72,20 +68,15 @@ def login():
 def door():
     data = request.json or {}
 
-    # 👉 gửi lệnh cho ESP32 (KHÔNG JSON)
     publish.single(
         "namhome/door/cmd",
-        "OPEN",
+        json.dumps({
+            "action": "OPEN",
+            "user": data.get("user", "unknown")
+        }),
         hostname=BROKER,
         port=1883
     )
-
-    # log
-    logs_col.insert_one({
-        "action": "door_open",
-        "user": data.get("user", "web"),
-        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    })
 
     return jsonify({"success": True})
 
@@ -94,20 +85,15 @@ def light():
     data = request.json or {}
     state = data.get("state", "OFF")
 
-    # 👉 gửi cho ESP32
     publish.single(
         "namhome/light/cmd",
-        state,   # ✅ chỉ ON/OFF
+        json.dumps({
+            "state": state,
+            "user": data.get("user", "unknown")
+        }),
         hostname=BROKER,
         port=1883
     )
-
-    # log
-    logs_col.insert_one({
-        "action": f"light_{state}",
-        "user": data.get("user", "web"),
-        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    })
 
     return jsonify({"success": True})
 
@@ -115,47 +101,6 @@ def light():
 @app.route("/status")
 def status():
     return jsonify(last_status)
-
-# ================== LOGS ==================
-@app.route("/logs")
-def get_logs():
-    data = list(logs_col.find({}, {"_id": 0}).sort("time", -1).limit(50))
-    return jsonify({"logs": data})
-
-# ================== USERS ==================
-@app.route("/users")
-def get_users():
-    data = list(users_col.find({}, {"_id": 0}))
-    return jsonify({"users": data})
-
-@app.route("/add_user", methods=["POST"])
-def add_user():
-    data = request.json
-    users_col.insert_one({
-        "username": data["username"],
-        "password": data["password"],
-        "role": data["role"]
-    })
-    return jsonify({"success": True})
-
-@app.route("/delete/<username>", methods=["DELETE"])
-def delete_user(username):
-    users_col.delete_one({"username": username})
-    return jsonify({"success": True})
-
-# ================== INIT ADMIN ==================
-@app.route("/seed_admin")
-def seed_admin():
-    users_col.update_one(
-        {"username": "admin"},
-        {"$set": {
-            "username": "admin",
-            "password": "123456",
-            "role": "admin"
-        }},
-        upsert=True
-    )
-    return "Admin created: admin / 123456"
 
 # ================== RUN ==================
 if __name__ == "__main__":
