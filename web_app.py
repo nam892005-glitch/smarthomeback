@@ -3,7 +3,7 @@ from flask_cors import CORS
 from pymongo import MongoClient
 import paho.mqtt.publish as publish
 import paho.mqtt.client as mqtt
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import json, os
 
 app = Flask(__name__)
@@ -19,6 +19,12 @@ users_col = db["users"]
 logs_col = db["logs"]
 
 last_status = {"result": "--"}
+
+# ================== TIME HELPER ==================
+def get_vn_time():
+    # Ép múi giờ GMT+7 chuẩn Việt Nam
+    tz_vn = timezone(timedelta(hours=7))
+    return datetime.now(tz_vn).strftime("%Y-%m-%d %H:%M:%S")
 
 # ================== MQTT ==================
 mqtt_client = mqtt.Client(protocol=mqtt.MQTTv311)
@@ -65,36 +71,41 @@ def login():
 def light():
     data = request.get_json(force=True) or {}
     state = data.get("state", "OFF")
-    # SỬA TẠI ĐÂY: Kiểm tra kỹ giá trị user gửi lên
+    
+    # Kiểm tra kỹ giá trị user từ Dashboard gửi lên
     user_name = data.get("user")
-    if not user_name or user_name == "undefined":
+    if not user_name or user_name == "undefined" or user_name == "null":
         user_name = "unknown"
 
+    # Gửi lệnh MQTT xuống ESP32
     publish.single("namhome/light/cmd", state, hostname=BROKER, port=1883)
 
+    # Lưu log với giờ Việt Nam
     logs_col.insert_one({
         "user": user_name,
         "device": "light",
         "action": state,
-        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        "time": get_vn_time()
     })
     return jsonify({"success": True})
 
 @app.route("/door", methods=["POST"])
 def door():
     data = request.get_json(force=True) or {}
-    # SỬA TẠI ĐÂY: Kiểm tra kỹ giá trị user gửi lên
+    
+    # Kiểm tra kỹ giá trị user
     user_name = data.get("user")
-    if not user_name or user_name == "undefined":
+    if not user_name or user_name == "undefined" or user_name == "null":
         user_name = "unknown"
 
     publish.single("namhome/door/cmd", "OPEN", hostname=BROKER, port=1883)
 
+    # Lưu log với giờ Việt Nam
     logs_col.insert_one({
         "user": user_name,
         "device": "door",
         "action": "OPEN",
-        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        "time": get_vn_time()
     })
     return jsonify({"success": True})
 
@@ -103,8 +114,9 @@ def door():
 def status():
     return jsonify(last_status)
 
-@app.route("/logs")
+@app.route("/logs", methods=["GET"])
 def get_logs():
+    # Lấy 50 log mới nhất
     data = list(logs_col.find({}, {"_id": 0}).sort("time", -1).limit(50))
     return jsonify({"logs": data})
 
