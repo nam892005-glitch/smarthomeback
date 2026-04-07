@@ -7,73 +7,145 @@ from datetime import datetime
 import json, os
 
 app = Flask(__name__)
-CORS(app) # Quan trọng để Frontend không bị chặn
+CORS(app)
 
 # ================== CONFIG ==================
 BROKER = "broker.emqx.io"
-MONGO_URI = "mongodb+srv://smarthome_user:123@cluster0.3s47ygi.mongodb.net/"
 
+MONGO_URI = "mongodb+srv://smarthome_user:123@cluster0.3s47ygi.mongodb.net/"
 mongo = MongoClient(MONGO_URI)
+
 db = mongo["smarthome"]
 users_col = db["users"]
 logs_col = db["logs"]
 
-# ================== ROUTES ==================
+last_status = {"result": "--"}
 
-# ĐĂNG NHẬP
+# ================== MQTT ==================
+mqtt_client = mqtt.Client(protocol=mqtt.MQTTv311)
+
+def on_connect(client, userdata, flags, rc):
+    print("🌍 MQTT CONNECTED:", rc)
+    client.subscribe("namhome/+/status")
+
+def on_message(client, userdata, msg):
+    global last_status
+    try:
+        payload = msg.payload.decode()
+
+        try:
+            data = json.loads(payload)
+        except:
+            data = {"result": payload}
+
+        last_status = data
+        print("📩 STATUS:", data)
+
+    except Exception as e:
+        print("❌ MQTT ERROR:", e)
+
+mqtt_client.on_connect = on_connect
+mqtt_client.on_message = on_message
+mqtt_client.connect(BROKER, 1883, 60)
+mqtt_client.loop_start()
+
+# ================== LOGIN ==================
 @app.route("/login", methods=["POST"])
 def login():
-    data = request.get_json(force=True)
+    data = request.json
+
     user = users_col.find_one({
         "username": data.get("username"),
         "password": data.get("password")
     })
+
     if user:
         return jsonify({
             "success": True,
             "user": user["username"],
             "role": user.get("role", "user")
         })
+
     return jsonify({"success": False})
 
-# ĐIỀU KHIỂN THIẾT BỊ
-@app.route("/control", methods=["POST"])
-def control():
-    data = request.get_json(force=True)
-    device = data.get("device") # 'light' hoặc 'door'
-    action = data.get("action") # 'ON', 'OFF', 'OPEN'
-    user_name = data.get("user", "unknown")
+# ================== CONTROL ==================
+@app.route("/light", methods=["POST"])
+def light():
+    data = request.json or {}
+    state = data.get("state", "OFF")
+    user = data.get("user", "unknown")
 
-    # Gửi lệnh xuống MQTT - Khớp với topic ESP32 đang chờ
-    topic = f"namhome/{device}/esp"
-    publish.single(topic, action, hostname=BROKER, port=1883)
+    # 👉 gửi xuống ESP32 (CHỈ ON/OFF)
+    publish.single(
+        "namhome/light/cmd",
+        state,
+        hostname=BROKER,
+        port=1883
+    )
 
-    # Lưu log vào MongoDB
+    print("📤 SENT TO ESP32:", state)
+
+    # 👉 lưu log
     logs_col.insert_one({
-        "user": user_name,
-        "device": device,
-        "action": action,
+        "user": user,
+        "device": "light",
+        "action": state,
         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     })
+
     return jsonify({"success": True})
 
-# LẤY DANH SÁCH LOGS
+
+@app.route("/door", methods=["POST"])
+def door():
+    data = request.json or {}
+    user = data.get("user", "unknown")
+
+    publish.single(
+        "namhome/door/cmd",
+        "OPEN",
+        hostname=BROKER,
+        port=1883
+    )
+
+    print("📤 SENT TO ESP32: OPEN")
+
+    logs_col.insert_one({
+        "user": user,
+        "device": "door",
+        "action": "OPEN",
+        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    })
+
+    return jsonify({"success": True})
+
+# ================== STATUS ==================
+@app.route("/status")
+def status():
+    return jsonify(last_status)
+
+# ================== LOGS ==================
 @app.route("/logs")
 def get_logs():
     data = list(logs_col.find({}, {"_id": 0}).sort("time", -1).limit(50))
     return jsonify({"logs": data})
 
-# LẤY DANH SÁCH USERS
+# ================== USERS ==================
 @app.route("/users")
 def get_users():
     data = list(users_col.find({}, {"_id": 0}))
     return jsonify({"users": data})
 
-# THÊM/XOÁ USER
 @app.route("/add_user", methods=["POST"])
 def add_user():
-    data = request.get_json(force=True)
-    users_col.insert_one(data)
+    data = request.json
+
+    users_col.insert_one({
+        "username": data["username"],
+        "password": data["password"],
+        "role": data["role"]
+    })
+
     return jsonify({"success": True})
 
 @app.route("/delete/<username>", methods=["DELETE"])
@@ -81,6 +153,20 @@ def delete_user(username):
     users_col.delete_one({"username": username})
     return jsonify({"success": True})
 
+# ================== INIT ADMIN ==================
+@app.route("/seed_admin")
+def seed_admin():
+    users_col.update_one(
+        {"username": "admin"},
+        {"$set": {
+            "username": "admin",
+            "password": "123456",
+            "role": "admin"
+        }},
+        upsert=True
+    )
+    return "Admin created: admin / 123456"
+
+# ================== RUN ==================
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=10000)
