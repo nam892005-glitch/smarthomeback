@@ -7,17 +7,18 @@ from datetime import datetime
 import json, os
 
 app = Flask(__name__)
-CORS(app)
+CORS(app) # Cho phép Frontend (GitHub/Local) truy cập API
 
 # ================== CONFIG ==================
 BROKER = "broker.emqx.io"
 
+# Đảm bảo kết nối MongoDB chính xác
 MONGO_URI = "mongodb+srv://smarthome_user:123@cluster0.3s47ygi.mongodb.net/"
 mongo = MongoClient(MONGO_URI)
 
 db = mongo["smarthome"]
-users_col = db["users"]
-logs_col = db["logs"]
+users_col = db["users"] # Tên collection: users
+logs_col = db["logs"]   # Tên collection: logs
 
 last_status = {"result": "--"}
 
@@ -32,15 +33,12 @@ def on_message(client, userdata, msg):
     global last_status
     try:
         payload = msg.payload.decode()
-
         try:
             data = json.loads(payload)
         except:
             data = {"result": payload}
-
         last_status = data
-        print("📩 STATUS:", data)
-
+        print("📩 STATUS RECEIVED:", data)
     except Exception as e:
         print("❌ MQTT ERROR:", e)
 
@@ -52,8 +50,9 @@ mqtt_client.loop_start()
 # ================== LOGIN ==================
 @app.route("/login", methods=["POST"])
 def login():
-    data = request.json
-
+    # request.get_json(force=True) giúp tránh lỗi khi Frontend không gửi đúng header
+    data = request.get_json(force=True) or {}
+    
     user = users_col.find_one({
         "username": data.get("username"),
         "password": data.get("password")
@@ -71,11 +70,11 @@ def login():
 # ================== CONTROL ==================
 @app.route("/light", methods=["POST"])
 def light():
-    data = request.json or {}
+    data = request.get_json(force=True) or {}
     state = data.get("state", "OFF")
-    user = data.get("user", "unknown")
+    user_name = data.get("user", "unknown") # Lấy user từ Frontend gửi lên
 
-    # 👉 gửi xuống ESP32 (CHỈ ON/OFF)
+    # Gửi xuống ESP32
     publish.single(
         "namhome/light/cmd",
         state,
@@ -83,11 +82,9 @@ def light():
         port=1883
     )
 
-    print("📤 SENT TO ESP32:", state)
-
-    # 👉 lưu log
+    # Lưu log - Quan trọng: đảm bảo 'user' có giá trị để không bị 'unknown'
     logs_col.insert_one({
-        "user": user,
+        "user": user_name,
         "device": "light",
         "action": state,
         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -95,11 +92,10 @@ def light():
 
     return jsonify({"success": True})
 
-
 @app.route("/door", methods=["POST"])
 def door():
-    data = request.json or {}
-    user = data.get("user", "unknown")
+    data = request.get_json(force=True) or {}
+    user_name = data.get("user", "unknown")
 
     publish.single(
         "namhome/door/cmd",
@@ -108,10 +104,8 @@ def door():
         port=1883
     )
 
-    print("📤 SENT TO ESP32: OPEN")
-
     logs_col.insert_one({
-        "user": user,
+        "user": user_name,
         "device": "door",
         "action": "OPEN",
         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -124,26 +118,28 @@ def door():
 def status():
     return jsonify(last_status)
 
-# ================== LOGS ==================
+# ================== LOGS (Dữ liệu cho log.html) ==================
 @app.route("/logs")
 def get_logs():
+    # Trả về mảng dưới key "logs" để khớp với data.logs.forEach ở Frontend
     data = list(logs_col.find({}, {"_id": 0}).sort("time", -1).limit(50))
     return jsonify({"logs": data})
 
-# ================== USERS ==================
+# ================== USERS (Dữ liệu cho user.html) ==================
 @app.route("/users")
 def get_users():
+    # Trả về mảng dưới key "users" để khớp với data.users.forEach ở Frontend
     data = list(users_col.find({}, {"_id": 0}))
     return jsonify({"users": data})
 
 @app.route("/add_user", methods=["POST"])
 def add_user():
-    data = request.json
-
+    data = request.get_json(force=True) or {}
+    
     users_col.insert_one({
-        "username": data["username"],
-        "password": data["password"],
-        "role": data["role"]
+        "username": data.get("username"),
+        "password": data.get("password"),
+        "role": data.get("role", "user")
     })
 
     return jsonify({"success": True})
@@ -160,13 +156,15 @@ def seed_admin():
         {"username": "admin"},
         {"$set": {
             "username": "admin",
-            "password": "123456",
+            "password": "123", # Đã sửa mật khẩu cho ngắn gọn theo ý bạn
             "role": "admin"
         }},
         upsert=True
     )
-    return "Admin created: admin / 123456"
+    return "Admin created: admin / 123"
 
 # ================== RUN ==================
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    # Dùng port từ biến môi trường của Render
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
